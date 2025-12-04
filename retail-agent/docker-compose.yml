@@ -1,1 +1,39 @@
+version: '3.8'
 
+services:
+  # The Brain (LangChain Logic)
+  ai_engine:
+    build: ./ai_engine
+    env_file: .env
+    volumes:
+      - ./ai_engine:/app
+    command: python agent.py
+
+  # The Nervous System (FastAPI Backend)
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongo
+      - redis
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # The Short-Term Memory (Sessions)
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  # The Long-Term Memory (Products)
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: aura_db
+    volumes:
+      - ./data/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
