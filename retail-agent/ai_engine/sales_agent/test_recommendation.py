@@ -1,4 +1,7 @@
 from recommendation_agent import get_recommendations
 
-results = get_recommendations(query="kurta")
-print(results)
+print("---- CATEGORY TEST ----")
+print(get_recommendations(category="smartphone"))
+
+print("\n---- TEXT TEST ----")
+print(get_recommendations(query="phone"))

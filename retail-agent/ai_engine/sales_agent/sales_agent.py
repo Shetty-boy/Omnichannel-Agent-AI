@@ -1,152 +1,247 @@
 from recommendation_agent import get_recommendations
-from intent_detector import detect_intent
-from llm_client import llm
+from inventory_agent import inventory_agent_run
+from fulfillment_agent import place_order
+from payment_agent import process_payment
+from loyalty_agent import calculate_final_price
+from post_purchase_agent import handle_post_purchase
+import re
 
 # -------------------------------------------------------------------
-# Placeholder Worker Agent Calls
-# (Replace these with real agents later)
+# SEMANTIC NORMALIZATION
 # -------------------------------------------------------------------
 
-def call_recommendation_agent(query: str):
-    return get_recommendations(query=query)
+CATEGORY_KEYWORDS = {
+    "Electronics": ["phone", "mobile", "smartphone", "laptop", "computer"],
+    "Sportswear": ["shoe", "shoes", "sports shoes", "running shoes"],
+    "Apparel": ["t shirt", "t-shirt", "tshirt", "shirt", "clothing"],
+    "Accessories": ["watch", "belt", "wallet", "accessory"],
+    "Home Decor": ["decor", "home decor"],
+    "Bags": ["bag", "bags", "backpack"]
+}
 
-def call_inventory_agent():
-    return "Check product availability in nearby stores."
+YES_WORDS = ["yes", "yeah", "yep", "sure", "ok"]
+STORE_WORDS = ["store", "shop", "outlet", "nearby"]
+DELIVERY_WORDS = ["delivery", "home", "ship", "online"]
+PAYMENT_WORDS = ["upi", "card", "pos", "gift"]
+POST_WORDS = ["track", "return", "feedback"]
 
-def call_offers_agent():
-    return "Apply applicable discounts and loyalty benefits."
+# -------------------------------------------------------------------
+# HELPERS
+# -------------------------------------------------------------------
 
-def call_payment_agent():
-    return "Proceed with secure payment."
+def resolve_category(text):
+    text = text.lower()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return category
+    return None
 
-def call_fulfillment_agent():
-    return "Arrange delivery or in-store pickup."
+
+def parse_product_selection(text, recommendations):
+    text = text.lower().strip()
+
+    if text.isdigit():
+        idx = int(text) - 1
+        if 0 <= idx < len(recommendations):
+            return recommendations[idx]
+
+    for product in recommendations:
+        if product["name"].lower() in text:
+            return product
+
+    return None
 
 
 # -------------------------------------------------------------------
-# SALES AGENT (CORE BRAIN)
+# SALES AGENT (ORCHESTRATOR)
 # -------------------------------------------------------------------
 
-def sales_agent_chat(user_message: str, session_context: dict):
-    """
-    Central Sales Agent:
-    - Understands customer intent
-    - Maintains conversation state
-    - Tracks what item the user is talking about
-    - Orchestrates worker agents
-    - Responds in natural language
-    """
+def sales_agent_chat(user_message: str, session: dict):
 
-    # -------------------------------
-    # 1. Initialize session memory
-    # -------------------------------
-    if "stage" not in session_context:
-        session_context["stage"] = "BROWSING"
+    session.setdefault("stage", "BROWSING")
+    session.setdefault("recommendations", [])
+    session.setdefault("selected_product", None)
+    session.setdefault("order_id", None)
+    session.setdefault("customer_id", "CUST_GUEST")
 
-    if "last_intent" not in session_context:
-        session_context["last_intent"] = None
+    msg = user_message.lower().strip()
 
-    if "current_item" not in session_context:
-        session_context["current_item"] = None
+    # --------------------------------------------------
+    # POST PURCHASE (TRACK / RETURN / FEEDBACK)
+    # --------------------------------------------------
+    if any(w in msg for w in POST_WORDS):
+        if not session.get("order_id"):
+            return "Please provide your order ID first.", session
 
-    # -------------------------------
-    # 2. Detect customer intent
-    # -------------------------------
-    intent = detect_intent(user_message)
-    session_context["last_intent"] = intent
+        if "track" in msg:
+            return handle_post_purchase(
+                request_type="TRACK",
+                order_id=session["order_id"]
+            ), session
 
-    # -------------------------------
-    # 3. Decide system action + update memory
-    # -------------------------------
-    if intent == "PRODUCT_DISCOVERY":
-        session_context["stage"] = "DISCOVERY"
-        session_context["current_item"] = user_message
+        if "return" in msg:
+            return handle_post_purchase(
+                request_type="RETURN",
+                order_id=session["order_id"],
+                details="User initiated return"
+            ), session
 
-        recommendations = call_recommendation_agent(user_message)
-        session_context["recommendations"] = recommendations
+        if "feedback" in msg:
+            return handle_post_purchase(
+                request_type="FEEDBACK",
+                order_id=session["order_id"],
+                details=msg,
+                rating=5
+            ), session
 
-        action = "Present product recommendations from catalog."
+    # --------------------------------------------------
+    # PRODUCT SELECTION
+    # --------------------------------------------------
+    if session["stage"] == "AWAITING_SELECTION":
+        selected = parse_product_selection(msg, session["recommendations"])
 
+        if not selected:
+            return "Please select a valid option number or product name.", session
 
-    elif intent == "AVAILABILITY_CHECK":
-        session_context["stage"] = "AVAILABILITY"
-        action = call_inventory_agent()
+        session["selected_product"] = selected
+        session["stage"] = "AVAILABILITY"
 
-    elif intent == "PRICE_OFFERS":
-        session_context["stage"] = "PRICING"
-        action = call_offers_agent()
-
-    elif intent == "BUY_NOW":
-        session_context["stage"] = "CHECKOUT"
-        action = call_payment_agent() + " " + call_fulfillment_agent()
-
-    elif intent == "POST_PURCHASE":
-        session_context["stage"] = "POST_PURCHASE"
         return (
-            "I can help you track, return, or exchange your order. What would you like to do?",
-            session_context
+            f"Great choice! You selected **{selected['name']}**. "
+            "Would you like me to check availability near you?",
+            session
         )
 
-    else:
-        action = "Assist the customer."
+    # --------------------------------------------------
+    # AVAILABILITY CONFIRM
+    # --------------------------------------------------
+    if msg in YES_WORDS and session["stage"] == "AVAILABILITY":
+        return (
+            "I can check availability at nearby stores or for home delivery. "
+            "Which would you prefer?",
+            session
+        )
 
-    # -------------------------------
-    # 4. Generate natural response (LLM)
-    # -------------------------------
-    prompt = f"""
-You are a professional retail sales associate.
+    # --------------------------------------------------
+    # STORE AVAILABILITY
+    # --------------------------------------------------
+    if any(w in msg for w in STORE_WORDS):
+        product = session["selected_product"]
 
-Customer journey stage: {session_context['stage']}
-Detected intent: {intent}
+        inventory = inventory_agent_run({"product_name": product["name"]})
+        availability = inventory.get("availability", {})
+        locations = availability.get("locations", {})
 
-The customer is currently interested in:
-{session_context['current_item']}
+        if availability.get("status") != "in_stock":
+            return "Sorry, this product is out of stock.", session
 
-Customer message:
-"{user_message}"
+        session["stage"] = "CONFIRM_RESERVATION"
 
-Recommended products from catalog:
-{session_context.get("recommendations")}
+        store_list = "\n".join(
+            [f"{k}: {v} units" for k, v in locations.items() if v > 0]
+        )
 
-Briefly introduce 1–2 products from this list.
-Do NOT invent products outside this list.
+        return (
+            f"Available at:\n{store_list}\n\n"
+            "Would you like me to reserve it?",
+            session
+        )
 
+    # --------------------------------------------------
+    # PLACE ORDER (FULFILLMENT)
+    # --------------------------------------------------
+    if msg in YES_WORDS and session["stage"] == "CONFIRM_RESERVATION":
+        product = session["selected_product"]
 
-Respond naturally in 1–2 sentences.
-Be clear about the product you are referring to.
-Avoid repeating earlier suggestions.
-Do not invent prices, stock, locations, or offers.
-"""
+        result = place_order.invoke({
+            "product_name": product["name"],
+            "quantity": 1,
+            "fulfillment_type": "PICKUP",
+            "location_query": "Mall"
+        })  
+        session["order_id"] = re.search(r"ORD-[A-Z0-9]+", result).group()
+        session["stage"] = "LOYALTY"
 
-    reply = llm(prompt)
+        return (
+            f"{result}\n\n"
+            "Do you want to apply coupons or loyalty points?",
+            session
+        )
 
-    # -------------------------------
-    # 5. Debug log (development only)
-    # -------------------------------
-    print(
-        f"[DEBUG] Intent={intent}, "
-        f"Stage={session_context['stage']}, "
-        f"Item={session_context['current_item']}"
-    )
+    # --------------------------------------------------
+    # LOYALTY
+    # --------------------------------------------------
+    if session["stage"] == "LOYALTY":
+        product = session["selected_product"]
 
-    return reply, session_context
+        price_info = calculate_final_price(
+            product_name=product["name"],
+            base_price=product["price"],
+            customer_id=session["customer_id"],
+            use_points=True
+        )
+
+        session["stage"] = "PAYMENT"
+
+        return (
+            f"{price_info}\n\n"
+            "How would you like to pay? (UPI / Card / POS / Gift)",
+            session
+        )
+
+    # --------------------------------------------------
+    # PAYMENT
+    # --------------------------------------------------
+    if session["stage"] == "PAYMENT":
+        result = process_payment.invoke({
+            "order_id": session["order_id"],
+            "payment_method": msg.upper()
+        })
+
+        session["stage"] = "COMPLETED"
+
+        return (
+            f"{result}\n\n"
+            "🎉 Thank you for shopping with us!\n"
+            "You can track, return, or leave feedback anytime.",
+            session
+        )
+
+    # --------------------------------------------------
+    # PRODUCT DISCOVERY
+    # --------------------------------------------------
+    category = resolve_category(msg)
+
+    if category:
+        recommendations = get_recommendations(category=category)
+        session["recommendations"] = recommendations
+        session["stage"] = "AWAITING_SELECTION"
+
+        product_list = "\n".join(
+            [f"{i+1}️⃣ {p['name']} – ₹{p['price']}"
+             for i, p in enumerate(recommendations)]
+        )
+
+        return (
+            f"Here are the available options:\n{product_list}\n\n"
+            "Please select an option.",
+            session
+        )
+
+    return "How can I assist you today?", session
 
 
 # -------------------------------------------------------------------
-# TERMINAL TEST MODE
+# TERMINAL MODE
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
     context = {}
-
     print("\nSales Agent is running. Type 'exit' to quit.\n")
 
     while True:
         user_input = input("User: ").strip()
-
-        if not user_input:
-            continue
-
         if user_input.lower() == "exit":
             break
 
