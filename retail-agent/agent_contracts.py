@@ -1,40 +1,26 @@
 """
-AGENT CONTRACTS
----------------
-All agents must follow this structure.
-No UI code inside agents.
+AGENT CONTRACTS (Reference Interface)
+-------------------------------------
+These signatures match the actual implementation in 'ai_engine'.
 """
 
-def sales_agent_handle(user_text: str, context: dict) -> dict:
+def sales_agent_chat(user_message: str, session: dict) -> tuple:
     """
-    Expected return:
-    {
-        "response": str,
-        "intent": str,
-        "stage": str,
-        "next_actions": list
-    }
+    Main Orchestrator.
+    Args:
+        user_message: Raw text input
+        session: Dict loaded from Redis
+    Returns:
+        (response_string, updated_session_dict)
     """
-    raise NotImplementedError("Sales Agent not connected yet")
-
-
-def recommendation_agent_run(payload: dict) -> dict:
-    """
-    Expected return:
-    {
-        "products": list,
-        "explanation": str
-    }
-    """
-    raise NotImplementedError("Recommendation Agent not connected yet")
-
+    raise NotImplementedError("See ai_engine/sales_agent/sales_agent.py")
 
 def inventory_agent_run(payload: dict) -> dict:
     """
-    Expected return:
-    {
-        "availability": dict,
-        "store": str
-    }
+    Checks Stock (Redis Cache -> MongoDB).
+    Args:
+        payload: {"product_name": "..."}
+    Returns:
+        dict: { "availability": {...}, "store": "..." }
     """
-    raise NotImplementedError("Inventory Agent not connected yet")
+    raise NotImplementedError("See ai_engine/sales_agent/inventory_agent.py")

@@ -1,42 +1,76 @@
 """
-UI + ORCHESTRATION FROZEN
-------------------------
-Status: Final UI shell
-Purpose: Waiting for Sales Agent + Worker Agent integration
-Do NOT modify this file
+UI + ORCHESTRATION (CONNECTED)
+------------------------------
+Status: Connected to Backend API
+Purpose: Frontend for Sales Agent + Redis Memory
 """
 
 import streamlit as st
 import pandas as pd
+import requests
+import uuid
 import random
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 import tempfile
 
 # -------------------------------------------------
-# Page Config
+# Configuration
 # -------------------------------------------------
+BACKEND_URL = "http://localhost:8000/chat"
+
 st.set_page_config(page_title="Retail Omnichannel Agentic AI", layout="wide")
 
 st.title("🛍️ Omnichannel Retail Agentic AI")
-st.caption("Channel-Adaptive Conversational Sales | Agentic Orchestration")
+st.caption("Channel-Adaptive Conversational Sales | Powered by Redis & MongoDB")
 
 # -------------------------------------------------
-# Session State
+# Session State & Memory
 # -------------------------------------------------
+# 1. Generate a unique Session ID for Redis
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-if "agent_data" not in st.session_state:
-    st.session_state.agent_data = {}
 
 if "previous_channel" not in st.session_state:
     st.session_state.previous_channel = None
 
+# Initialize Dashboard Data (Placeholder for visualization)
+if "agent_data" not in st.session_state:
+    st.session_state.agent_data = {
+        "recommendations": pd.DataFrame({
+            "Product": ["Festive Kurta", "Ethnic Jacket"],
+            "Price (₹)": [2499, 3999],
+            "Match (%)": [94, 87]
+        }),
+        "inventory": pd.DataFrame({
+            "Product": ["Festive Kurta", "Ethnic Jacket"],
+            "Availability": ["Available", "Limited"],
+            "Store": ["Phoenix Mall", "Phoenix Mall"]
+        }),
+        "loyalty": {
+            "Tier": "Gold",
+            "Points Earned": 150,
+            "Upsell Recommendation": "Add matching stole for ₹799",
+            "AOV Uplift": "↑ 18%"
+        },
+        "payment": {
+            "Mode": "Pending", 
+            "Status": "Waiting for User"
+        },
+        "fulfillment": {
+            "Mode": "N/A", 
+            "Status": "Not Started"
+        },
+        "support": None
+    }
+
 # -------------------------------------------------
 # Sidebar – Channel Switching
 # -------------------------------------------------
-st.sidebar.header("Channel Context")
+st.sidebar.header(f"Session: {st.session_state.session_id[:8]}")
 
 channel = st.sidebar.selectbox(
     "Customer Channel",
@@ -55,6 +89,11 @@ customer = st.sidebar.selectbox(
 
 st.sidebar.markdown("---")
 reserve_mode = st.sidebar.checkbox("Reserve In-Store", False)
+
+if st.sidebar.button("🧹 Clear Chat Memory"):
+    st.session_state.messages = []
+    st.session_state.session_id = str(uuid.uuid4())
+    st.rerun()
 
 # -------------------------------------------------
 # Detect Channel Switch
@@ -83,94 +122,47 @@ else:
     user_input = st.chat_input("Talk to the Sales Assistant...")
 
 # -------------------------------------------------
-# Conversation Logic
+# Conversation Logic (CONNECTED TO BACKEND)
 # -------------------------------------------------
 if user_input:
+    # 1. Display User Message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    intent = "browse"
-    if any(x in user_input.lower() for x in ["buy", "checkout", "purchase"]):
-        intent = "checkout"
-    elif any(x in user_input.lower() for x in ["reserve", "try"]):
-        intent = "reserve"
-    elif any(x in user_input.lower() for x in ["return", "exchange", "refund", "track"]):
-        intent = "post_purchase"
+    # 2. Call Backend API
+    try:
+        with st.spinner("🤖 Aura is thinking..."):
+            payload = {
+                "message": user_input,
+                "session_id": st.session_state.session_id
+            }
+            
+            # 🚀 SEND REQUEST TO PYTHON BACKEND
+            response = requests.post(BACKEND_URL, json=payload)
+            
+            if response.status_code == 200:
+                data = response.json()
+                bot_reply = data.get("reply", "⚠️ No response from agent.")
+                stage = data.get("stage", "UNKNOWN")
+                
+                # Optional: You can trigger UI updates based on 'stage' here
+                if stage == "PAYMENT":
+                    st.toast("💰 Payment Gateway Activated")
+                    
+            else:
+                bot_reply = f"❌ Server Error: {response.status_code}"
 
-    response = f"""
-🧠 **Sales Agent**
+    except Exception as e:
+        bot_reply = f"❌ Connection Error: Ensure 'backend/main.py' is running. ({e})"
 
-Channel: **{channel}**  
-Customer: **{customer}**  
-Intent: **{intent.upper()}**
-
-Routing to relevant agents…
-"""
+    # 3. Display Assistant Response
+    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
     with st.chat_message("assistant"):
-        st.markdown(response)
-
-    st.session_state.messages.append({"role": "assistant", "content": response})
-
-    # -------------------------------------------------
-    # Worker Agents – Core Commerce
-    # -------------------------------------------------
-    st.session_state.agent_data["recommendations"] = pd.DataFrame({
-        "Product": ["Festive Kurta", "Ethnic Jacket"],
-        "Price (₹)": [2499, 3999],
-        "Match (%)": [94, 87]
-    })
-
-    st.session_state.agent_data["inventory"] = pd.DataFrame({
-        "Product": ["Festive Kurta", "Ethnic Jacket"],
-        "Availability": ["Available", "Limited"],
-        "Store": ["Phoenix Mall", "Phoenix Mall"]
-    })
-
-    # -------------------------------------------------
-    # Loyalty & AOV Agent
-    # -------------------------------------------------
-    loyalty_tier = random.choice(["Silver", "Gold", "Platinum"])
-    points_earned = random.randint(120, 350)
-
-    st.session_state.agent_data["loyalty"] = {
-        "Tier": loyalty_tier,
-        "Points Earned": points_earned,
-        "Upsell Recommendation": "Add matching stole for ₹799",
-        "AOV Uplift": "↑ 18%"
-    }
-
-    # -------------------------------------------------
-    # Fulfillment & Payment
-    # -------------------------------------------------
-    if reserve_mode or intent == "reserve":
-        st.session_state.agent_data["fulfillment"] = {
-            "Mode": "Reserved In-Store",
-            "Store": "Phoenix Mall",
-            "Status": "Reserved for 24 hours"
-        }
-        st.session_state.agent_data["payment"] = {
-            "Mode": "Pay at Store",
-            "Status": "Pending"
-        }
-    else:
-        st.session_state.agent_data["payment"] = {
-            "Mode": "Online",
-            "Status": "Completed"
-        }
-
-    # -------------------------------------------------
-    # Post-Purchase Support Agent
-    # -------------------------------------------------
-    if intent == "post_purchase":
-        st.session_state.agent_data["support"] = {
-            "Actions Available": ["Return", "Exchange", "Track Order"],
-            "Ticket Status": "Resolved via AI",
-            "Customer Satisfaction": "⭐⭐⭐⭐⭐"
-        }
+        st.markdown(bot_reply)
 
 # -------------------------------------------------
-# Worker Agent Tabs
+# Worker Agent Tabs (Dashboard)
 # -------------------------------------------------
 if channel not in ["WhatsApp / Telegram", "Voice Assistant"]:
     st.markdown("---")
@@ -206,7 +198,6 @@ if channel not in ["WhatsApp / Telegram", "Voice Assistant"]:
     with tab5:
         fulfillment = st.session_state.agent_data.get("fulfillment")
         if fulfillment:
-            st.success("Fulfillment Confirmed")
             st.write(fulfillment)
 
     with tab6:
@@ -220,25 +211,24 @@ if channel not in ["WhatsApp / Telegram", "Voice Assistant"]:
 # -------------------------------------------------
 # PDF Confirmation
 # -------------------------------------------------
-if "fulfillment" in st.session_state.agent_data:
-    st.markdown("---")
-    if st.button("📄 Download Order Confirmation PDF"):
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        c = canvas.Canvas(tmp.name, pagesize=A4)
+st.markdown("---")
+if st.button("📄 Download Order Confirmation PDF"):
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    c = canvas.Canvas(tmp.name, pagesize=A4)
 
-        c.drawString(50, 800, "Retail Order Confirmation")
-        c.drawString(50, 770, f"Customer: {customer}")
-        c.drawString(50, 750, f"Channel: {channel}")
-        c.drawString(50, 730, f"Loyalty Tier: {st.session_state.agent_data['loyalty']['Tier']}")
-        c.drawString(50, 710, f"AOV Impact: {st.session_state.agent_data['loyalty']['AOV Uplift']}")
+    c.drawString(50, 800, "Retail Order Confirmation")
+    c.drawString(50, 770, f"Customer: {customer}")
+    c.drawString(50, 750, f"Channel: {channel}")
+    c.drawString(50, 730, f"Session ID: {st.session_state.session_id}")
+    c.drawString(50, 710, "Status: Processed via Omnichannel Agent")
 
-        c.showPage()
-        c.save()
+    c.showPage()
+    c.save()
 
-        with open(tmp.name, "rb") as f:
-            st.download_button(
-                "⬇️ Download PDF",
-                f,
-                file_name="order_confirmation.pdf",
-                mime="application/pdf"
-            )
+    with open(tmp.name, "rb") as f:
+        st.download_button(
+            "⬇️ Download PDF",
+            f,
+            file_name="order_confirmation.pdf",
+            mime="application/pdf"
+        )

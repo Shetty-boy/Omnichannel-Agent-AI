@@ -4,6 +4,7 @@ from fulfillment_agent import place_order
 from payment_agent import process_payment
 from loyalty_agent import calculate_final_price
 from post_purchase_agent import handle_post_purchase
+from cache import get_session, save_session
 import re
 
 # -------------------------------------------------------------------
@@ -160,14 +161,26 @@ def sales_agent_chat(user_message: str, session: dict):
             "fulfillment_type": "PICKUP",
             "location_query": "Mall"
         })  
-        session["order_id"] = re.search(r"ORD-[A-Z0-9]+", result).group()
-        session["stage"] = "LOYALTY"
-
-        return (
-            f"{result}\n\n"
-            "Do you want to apply coupons or loyalty points?",
-            session
-        )
+        
+        match = re.search(r"(ORD-[A-Z0-9]+|#\d+|Order\s+#?\d+)", result, re.IGNORECASE)
+        
+        if match:
+            raw_id = match.group()
+            session["order_id"] = raw_id.replace("Order ", "").strip()
+            
+            session["stage"] = "LOYALTY"
+            
+            return (
+                f"{result}\n\n"
+                f"Do you want to apply coupons or loyalty points?",
+                session
+            )
+        else:
+            return (
+                f" Order attempt finished, but I couldn't verify the ID.\nResponse: {result}\n"
+                "Would you like to try again?",
+                session
+            )
 
     # --------------------------------------------------
     # LOYALTY
@@ -237,13 +250,31 @@ def sales_agent_chat(user_message: str, session: dict):
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    context = {}
-    print("\nSales Agent is running. Type 'exit' to quit.\n")
+    import uuid
+    # Static ID for testing persistence (Use a random one in production)
+    TEST_SESSION_ID = "CONSOLE_TEST_USER_001"
+    
+    print(f"\nSales Agent Running (Session: {TEST_SESSION_ID})")
+    print("   Type 'exit' to quit. Type 'clear' to reset memory.\n")
 
     while True:
         user_input = input("User: ").strip()
         if user_input.lower() == "exit":
             break
+        
+        # 1. LOAD SESSION FROM REDIS
+        if user_input.lower() == "clear":
+            session = {}
+            save_session(TEST_SESSION_ID, {}) # Wipe Redis
+            print("🧹 Memory wiped!")
+            continue
+        else:
+            session = get_session(TEST_SESSION_ID)
 
-        reply, context = sales_agent_chat(user_input, context)
+        # 2. RUN AGENT
+        reply, updated_session = sales_agent_chat(user_input, session)
+        
+        # 3. SAVE SESSION TO REDIS
+        save_session(TEST_SESSION_ID, updated_session)
+        
         print("Agent:", reply, "\n")

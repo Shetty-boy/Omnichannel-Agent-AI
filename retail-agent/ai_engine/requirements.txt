@@ -8,3 +8,8 @@ python-dotenv
 uvicorn
 fastapi
 pydantic
+streamlit
+pandas
+requests
+reportlab
+requests
