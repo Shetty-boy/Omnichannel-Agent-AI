@@ -12,8 +12,9 @@ import re
 # -------------------------------------------------------------------
 
 CATEGORY_KEYWORDS = {
-    "Electronics": ["phone", "mobile", "smartphone", "laptop", "computer"],
-    "Sportswear": ["shoe", "shoes", "sports shoes", "running shoes"],
+    "Smartphones": ["phone", "mobile", "smartphone"],
+    "Laptops": ["laptop", "notebook", "computer", "macbook","mac"],
+    "Sportswear": ["shoe", "shoes", "running shoes", "sports shoes"],
     "Apparel": ["t shirt", "t-shirt", "tshirt", "shirt", "clothing"],
     "Accessories": ["watch", "belt", "wallet", "accessory"],
     "Home Decor": ["decor", "home decor"],
@@ -67,6 +68,16 @@ def sales_agent_chat(user_message: str, session: dict):
     session.setdefault("customer_id", "CUST_GUEST")
 
     msg = user_message.lower().strip()
+
+    # --------------------------------------------------
+    # OVERRIDE: NEW CATEGORY ALWAYS RESETS FLOW ✅
+    # --------------------------------------------------
+    new_category = resolve_category(msg)
+
+    if new_category and session.get("stage") == "AWAITING_SELECTION":
+        session["stage"] = "BROWSING"
+        session["recommendations"] = []
+        session["selected_product"] = None
 
     # --------------------------------------------------
     # POST PURCHASE (TRACK / RETURN / FEEDBACK)
@@ -160,27 +171,20 @@ def sales_agent_chat(user_message: str, session: dict):
             "quantity": 1,
             "fulfillment_type": "PICKUP",
             "location_query": "Mall"
-        })  
-        
-        match = re.search(r"(ORD-[A-Z0-9]+|#\d+|Order\s+#?\d+)", result, re.IGNORECASE)
-        
+        })
+
+        match = re.search(r"(ORD-[A-Z0-9]+)", result)
         if match:
-            raw_id = match.group()
-            session["order_id"] = raw_id.replace("Order ", "").strip()
-            
+            session["order_id"] = match.group()
             session["stage"] = "LOYALTY"
-            
+
             return (
                 f"{result}\n\n"
-                f"Do you want to apply coupons or loyalty points?",
+                "Do you want to apply coupons or loyalty points?",
                 session
             )
-        else:
-            return (
-                f" Order attempt finished, but I couldn't verify the ID.\nResponse: {result}\n"
-                "Would you like to try again?",
-                session
-            )
+
+        return result, session
 
     # --------------------------------------------------
     # LOYALTY
@@ -224,10 +228,8 @@ def sales_agent_chat(user_message: str, session: dict):
     # --------------------------------------------------
     # PRODUCT DISCOVERY
     # --------------------------------------------------
-    category = resolve_category(msg)
-
-    if category:
-        recommendations = get_recommendations(category=category)
+    if new_category:
+        recommendations = get_recommendations(category=new_category)
         session["recommendations"] = recommendations
         session["stage"] = "AWAITING_SELECTION"
 
@@ -250,10 +252,8 @@ def sales_agent_chat(user_message: str, session: dict):
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import uuid
-    # Static ID for testing persistence (Use a random one in production)
     TEST_SESSION_ID = "CONSOLE_TEST_USER_001"
-    
+
     print(f"\nSales Agent Running (Session: {TEST_SESSION_ID})")
     print("   Type 'exit' to quit. Type 'clear' to reset memory.\n")
 
@@ -261,20 +261,14 @@ if __name__ == "__main__":
         user_input = input("User: ").strip()
         if user_input.lower() == "exit":
             break
-        
-        # 1. LOAD SESSION FROM REDIS
+
         if user_input.lower() == "clear":
-            session = {}
-            save_session(TEST_SESSION_ID, {}) # Wipe Redis
+            save_session(TEST_SESSION_ID, {})
             print("🧹 Memory wiped!")
             continue
-        else:
-            session = get_session(TEST_SESSION_ID)
 
-        # 2. RUN AGENT
+        session = get_session(TEST_SESSION_ID)
         reply, updated_session = sales_agent_chat(user_input, session)
-        
-        # 3. SAVE SESSION TO REDIS
         save_session(TEST_SESSION_ID, updated_session)
-        
+
         print("Agent:", reply, "\n")
